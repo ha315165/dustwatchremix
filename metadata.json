@@ -1,0 +1,8 @@
+{
+  "name": "Remix Remix Remix Remix DustWatch",
+  "description": "A student-built tool estimating 12-hour dust risk levels across the UAE to help users plan outdoor activities safely.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
