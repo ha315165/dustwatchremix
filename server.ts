@@ -442,6 +442,128 @@ export function createApp(options: CreateAppOptions = {}): express.Express {
         return res.status(400).json({ ok: false, error: `Invalid or missing assessment status: ${rawStatus}` });
       }
 
+      // Parse triggered rules early for policy-state and contradiction validation
+      let ruleIdentifiers: string[] = [];
+      let normalizedTriggeredRules: Array<{ ruleId: string; metric?: string }> = [];
+      if (Array.isArray(req.body?.triggeredRules)) {
+        normalizedTriggeredRules = req.body.triggeredRules
+          .slice(0, 10)
+          .map((r: unknown) => {
+            if (typeof r === 'string') {
+              const rId = shortText(r, 60) ?? '';
+              return rId ? { ruleId: rId } : undefined;
+            }
+            if (r && typeof r === 'object') {
+              const ruleObj = r as Record<string, unknown>;
+              const rId = shortText(ruleObj.ruleId || ruleObj.id, 40) ?? '';
+              const metric = shortText(ruleObj.metric, 30);
+              if (!rId && !metric) return undefined;
+              return metric ? { ruleId: rId || metric, metric } : { ruleId: rId };
+            }
+            return undefined;
+          })
+          .filter(Boolean) as Array<{ ruleId: string; metric?: string }>;
+
+        normalizedTriggeredRules.sort((a, b) => a.ruleId.localeCompare(b.ruleId));
+
+        ruleIdentifiers = normalizedTriggeredRules.map((r) =>
+          r.metric && r.ruleId !== r.metric ? `${r.ruleId} (${r.metric})` : r.ruleId
+        );
+        ruleIdentifiers.sort();
+      }
+
+      // Priority 2: Reject missing or contradictory policy-status combinations with HTTP 400
+      if (rawStatus === 'criteria_met_no_actions') {
+        // Require explicitly verified configured policy state before accepting criteria_met_no_actions
+        if (req.body?.isPolicyConfigured !== true) {
+          return res.status(400).json({
+            ok: false,
+            error: 'criteria_met_no_actions assessment requires explicitly verified isPolicyConfigured: true',
+          });
+        }
+        if (req.body?.isIncomplete === true || req.body?.dataMissingForAssessment === true) {
+          return res.status(400).json({
+            ok: false,
+            error: 'Contradictory policy status: criteria_met_no_actions cannot have incomplete data',
+          });
+        }
+        if (rawAction !== 'normal') {
+          return res.status(400).json({
+            ok: false,
+            error: 'Contradictory policy status: criteria_met_no_actions cannot have non-normal action',
+          });
+        }
+        if (ruleIdentifiers.length > 0) {
+          return res.status(400).json({
+            ok: false,
+            error: 'Contradictory policy status: criteria_met_no_actions cannot have triggered rules',
+          });
+        }
+      }
+
+      // Reject non-normal action without triggered rules to justify it
+      if (rawAction !== 'normal' && ruleIdentifiers.length === 0) {
+        return res.status(200).json({
+          ok: false,
+          error: 'AI summary gated: non-normal action requires triggered rules',
+        });
+      }
+
+      if (rawStatus === 'action_triggered') {
+        if (req.body?.isPolicyConfigured === false) {
+          return res.status(400).json({
+            ok: false,
+            error: 'Contradictory policy status: action_triggered cannot have isPolicyConfigured: false',
+          });
+        }
+        if (ruleIdentifiers.length === 0) {
+          return res.status(400).json({
+            ok: false,
+            error: 'Contradictory policy status: action_triggered requires triggered rules',
+          });
+        }
+      }
+
+      if (rawStatus === 'policy_unconfigured') {
+        if (req.body?.isPolicyConfigured === true) {
+          return res.status(400).json({
+            ok: false,
+            error: 'Contradictory policy status: policy_unconfigured cannot have isPolicyConfigured: true',
+          });
+        }
+        if (ruleIdentifiers.length > 0 || rawAction !== 'normal') {
+          return res.status(400).json({
+            ok: false,
+            error: 'Contradictory policy status: policy_unconfigured cannot have non-normal action or triggered rules',
+          });
+        }
+      }
+
+      if (rawStatus === 'no_applicable_rules') {
+        if (req.body?.isPolicyConfigured === false) {
+          return res.status(400).json({
+            ok: false,
+            error: 'Contradictory policy status: no_applicable_rules cannot have isPolicyConfigured: false',
+          });
+        }
+        if (ruleIdentifiers.length > 0 || rawAction !== 'normal') {
+          return res.status(400).json({
+            ok: false,
+            error: 'Contradictory policy status: no_applicable_rules cannot have non-normal action or triggered rules',
+          });
+        }
+      }
+
+      if (rawStatus === 'assessment_unavailable') {
+        if (ruleIdentifiers.length > 0 || rawAction !== 'normal') {
+          return res.status(400).json({
+            ok: false,
+            error: 'Contradictory policy status: assessment_unavailable cannot have non-normal action or triggered rules',
+          });
+        }
+      }
+
+
       // Gate AI summaries on server if policy is unconfigured, demo, no applicable rules, or data missing/incomplete
       if (
         req.body?.isFictionalDemo === true ||
@@ -478,68 +600,6 @@ export function createApp(options: CreateAppOptions = {}): express.Express {
         return res.status(200).json({
           ok: false,
           error: 'AI summary gated: core readings are missing or unavailable',
-        });
-      }
-
-      // Send rule IDs and metric names instead of free text
-      let ruleIdentifiers: string[] = [];
-      let normalizedTriggeredRules: Array<{ ruleId: string; metric?: string }> = [];
-      if (Array.isArray(req.body?.triggeredRules)) {
-        normalizedTriggeredRules = req.body.triggeredRules
-          .slice(0, 10)
-          .map((r: unknown) => {
-            if (typeof r === 'string') {
-              const rId = shortText(r, 60) ?? '';
-              return rId ? { ruleId: rId } : undefined;
-            }
-            if (r && typeof r === 'object') {
-              const ruleObj = r as Record<string, unknown>;
-              const rId = shortText(ruleObj.ruleId || ruleObj.id, 40) ?? '';
-              const metric = shortText(ruleObj.metric, 30);
-              if (!rId && !metric) return undefined;
-              return metric ? { ruleId: rId || metric, metric } : { ruleId: rId };
-            }
-            return undefined;
-          })
-          .filter(Boolean) as Array<{ ruleId: string; metric?: string }>;
-
-        normalizedTriggeredRules.sort((a, b) => a.ruleId.localeCompare(b.ruleId));
-
-        ruleIdentifiers = normalizedTriggeredRules.map((r) =>
-          r.metric && r.ruleId !== r.metric ? `${r.ruleId} (${r.metric})` : r.ruleId
-        );
-        ruleIdentifiers.sort();
-      }
-
-      // Independently gate if action is not 'normal' but no rules triggered to justify it
-      if (rawAction !== 'normal' && ruleIdentifiers.length === 0) {
-        return res.status(200).json({
-          ok: false,
-          error: 'AI summary gated: non-normal action requires triggered rules',
-        });
-      }
-
-      // Consistency check: criteria_met_no_actions cannot have triggered rules or non-normal action
-      if (rawStatus === 'criteria_met_no_actions') {
-        if (ruleIdentifiers.length > 0) {
-          return res.status(200).json({
-            ok: false,
-            error: 'AI summary gated: criteria_met_no_actions cannot have triggered rules',
-          });
-        }
-        if (rawAction !== 'normal') {
-          return res.status(200).json({
-            ok: false,
-            error: 'AI summary gated: criteria_met_no_actions cannot have non-normal action',
-          });
-        }
-      }
-
-      // Consistency check: action_triggered must have triggered rules
-      if (rawStatus === 'action_triggered' && ruleIdentifiers.length === 0) {
-        return res.status(200).json({
-          ok: false,
-          error: 'AI summary gated: action_triggered requires triggered rules',
         });
       }
 

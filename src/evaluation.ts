@@ -189,26 +189,37 @@ export function parseAndEvaluateCsv(
   const isSynthetic = Boolean(
     workbenchMeta?.isSynthetic ||
     isSyntheticFromComment ||
-    /synthetic/i.test(hindcastLabelFromComment || '')
+    /synthetic/i.test(hindcastLabelFromComment || '') ||
+    /synthetic/i.test(workbenchMeta?.hindcastLabel || '')
   );
   const isSample = Boolean(
     workbenchMeta?.isSample ||
-    /sample/i.test(hindcastLabelFromComment || '')
+    /sample/i.test(hindcastLabelFromComment || '') ||
+    /sample/i.test(workbenchMeta?.hindcastLabel || '')
   );
-  const isUnknownOrigin = !hasMeta;
+  const isUnknownOrigin = Boolean(
+    !hasMeta ||
+    workbenchMeta?.isUnknownOrigin ||
+    (!isSynthetic && !isSample && (!hindcastLabelFromComment || !/open-meteo|cams|hindcast/i.test(hindcastLabelFromComment)) && !workbenchMeta?.searchedPeriod?.start)
+  );
 
   let hindcastLabel = 'Uploaded CSV (Unknown origin / unverified provenance)';
   if (isSynthetic) {
-    hindcastLabel =
-      hindcastLabelFromComment ||
-      workbenchMeta?.hindcastLabel ||
-      'Synthetic demonstration data (Not real Open-Meteo hindcast data).';
+    // Ensure generated synthetic hindcasts cannot be relabelled as genuine historical observations by changing metadata alone!
+    const candidateLabel = hindcastLabelFromComment || workbenchMeta?.hindcastLabel || '';
+    if (candidateLabel && (/synthetic/i.test(candidateLabel) || /sample/i.test(candidateLabel))) {
+      hindcastLabel = candidateLabel;
+    } else {
+      hindcastLabel = 'Synthetic demonstration data (Not real Open-Meteo hindcast data).';
+    }
   } else if (isSample) {
-    hindcastLabel =
-      hindcastLabelFromComment ||
-      workbenchMeta?.hindcastLabel ||
-      'Sample demonstration data';
-  } else if (hasMeta) {
+    const candidateLabel = hindcastLabelFromComment || workbenchMeta?.hindcastLabel || '';
+    if (candidateLabel && /sample/i.test(candidateLabel)) {
+      hindcastLabel = candidateLabel;
+    } else {
+      hindcastLabel = 'Sample demonstration data';
+    }
+  } else if (hasMeta && !isUnknownOrigin) {
     hindcastLabel = workbenchMeta?.hindcastLabel || hindcastLabelFromComment || 'Hindcast dataset';
   }
 
@@ -367,8 +378,14 @@ export function parseAndEvaluateCsv(
   // Construct JSON representation that matches EvaluationResultSet with complete provenance
   const evaluationSet: Record<string, unknown> = {
     datasetDescription: effectiveMeta
-      ? `${effectiveMeta.isSynthetic ? 'Synthetic Demonstration Data' : 'Hindcast Backtest'} (${validRows.length} evaluated hours)`
-      : `User evaluated dataset (${validRows.length} valid rows)`,
+      ? (effectiveMeta.isSynthetic
+          ? `Synthetic Demonstration Data (${validRows.length} evaluated hours)`
+          : effectiveMeta.isSample
+          ? `Sample Demonstration Data (${validRows.length} evaluated hours)`
+          : effectiveMeta.isUnknownOrigin
+          ? `Unverified Origin Dataset (${validRows.length} valid rows)`
+          : `Hindcast Backtest (${validRows.length} evaluated hours)`)
+      : `Unverified Origin Dataset (${validRows.length} valid rows)`,
     period: `${validRows[0]?.timestamp || ''} to ${validRows[validRows.length - 1]?.timestamp || ''}`,
     cities: Array.from(new Set(validRows.map((r) => r.city))),
     eventDefinitionUsed: APP_CONFIG.eventDefinitionText,
@@ -383,9 +400,15 @@ export function parseAndEvaluateCsv(
     teamNotes: effectiveMeta
       ? (effectiveMeta.isSynthetic
           ? 'Generated via DustWatch Backtest Evaluation Workbench (SYNTHETIC DEMO DATA - not for real accuracy validation).'
+          : effectiveMeta.isSample
+          ? 'Generated via DustWatch Backtest Evaluation Workbench (Sample demonstration data).'
+          : effectiveMeta.isUnknownOrigin
+          ? 'Generated via DustWatch CSV evaluation (Unverified provenance - not real-world validation).'
           : 'Generated via DustWatch Backtest Evaluation Workbench.')
-      : 'Generated via DustWatch browser evaluation tool.',
+      : 'Generated via DustWatch browser evaluation tool (Unverified origin).',
     ...(effectiveMeta?.isSynthetic ? { isSynthetic: true } : {}),
+    ...(effectiveMeta?.isSample ? { isSample: true } : {}),
+    ...(effectiveMeta?.isUnknownOrigin ? { isUnknownOrigin: true } : {}),
     ...(effectiveMeta?.hindcastLabel ? { hindcastLabel: effectiveMeta.hindcastLabel } : {}),
     ...(effectiveMeta?.searchedPeriod ? { searchedPeriod: effectiveMeta.searchedPeriod } : {}),
     ...(effectiveMeta?.thresholdsUsed ? { thresholdsUsed: effectiveMeta.thresholdsUsed } : {}),

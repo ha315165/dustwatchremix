@@ -211,16 +211,26 @@ export async function fetchAllCitiesLiveData(): Promise<Record<string, RawCityDa
 
 /**
  * Slices 12 consecutive hours starting at current Asia/Dubai hour from raw responses.
+ *
+ * Rules:
+ * - Does NOT default to the first timestamp when the current Asia/Dubai hour cannot be matched.
+ * - Does NOT pad a short 12-hour window with earlier timestamps.
+ * - Aligns weather and air-quality readings strictly by timestamp.
+ * - Returns null if the intended 12-hour forecast window cannot be established.
  */
 export function extract12Hours(
   rawCity: RawCityData,
   currentDubaiHourStr: string
-): RawHourlyVariables[] {
+): RawHourlyVariables[] | null {
   const aq = rawCity.airQuality?.hourly;
   const wx = rawCity.weather?.hourly;
 
   const aqTimes = aq?.time || [];
   const wxTimes = wx?.time || [];
+
+  if (aqTimes.length === 0 && wxTimes.length === 0) {
+    return null;
+  }
 
   // Build timestamp lookup maps to guarantee correct hour alignment
   const aqIndexMap = new Map<string, number>();
@@ -236,23 +246,24 @@ export function extract12Hours(
   // Use sorted unique timestamps from available feeds
   const allTimes = Array.from(new Set([...aqTimes, ...wxTimes])).sort();
 
-  // Find current hour index
-  let startIndex = allTimes.findIndex(
+  // Find current hour index strictly matching currentDubaiHourStr
+  const startIndex = allTimes.findIndex(
     (t) => t === currentDubaiHourStr || t.startsWith(currentDubaiHourStr.slice(0, 13))
   );
+
+  // Priority 1: Do NOT default to the first timestamp when current hour cannot be matched
   if (startIndex === -1) {
-    startIndex = 0;
+    return null;
   }
 
-  // Ensure we can extract 12 hours
-  const safeEnd = Math.min(allTimes.length, startIndex + 12);
-  const slicedTimes = allTimes.slice(startIndex, safeEnd);
-
-  // If array has fewer than 12 hours from startIndex, pad from start
-  while (slicedTimes.length < 12 && allTimes.length > slicedTimes.length) {
-    slicedTimes.push(allTimes[slicedTimes.length]);
+  // Priority 1: Do NOT pad a short 12-hour window with earlier timestamps
+  if (allTimes.length - startIndex < 12) {
+    return null;
   }
 
+  const slicedTimes = allTimes.slice(startIndex, startIndex + 12);
+
+  // Priority 1: Align weather and air-quality readings strictly by timestamp
   return slicedTimes.map((t) => {
     const aqIdx = aqIndexMap.get(t);
     const wxIdx = wxIndexMap.get(t);
@@ -288,6 +299,42 @@ export function processCityOutlook(
   fetchTimeString: string
 ): CityOutlook {
   const hourly12 = extract12Hours(rawCity, currentDubaiHourStr);
+
+  if (!hourly12 || hourly12.length < 12) {
+    return {
+      city: rawCity.city,
+      levelNow: 'Low',
+      scoreNow: 0,
+      peakHourIndex: 0,
+      peakHourTime: 'Unavailable',
+      peakLevel: 'Low',
+      peakScore: 0,
+      bestWindow: {
+        startHourIndex: 0,
+        endHourIndex: 0,
+        displayRange: 'Unavailable',
+        averageScore: 0,
+        level: 'Low',
+      },
+      worstWindow: {
+        startHourIndex: 0,
+        endHourIndex: 0,
+        displayRange: 'Unavailable',
+        averageScore: 0,
+        level: 'Low',
+      },
+      confidence: 'Low',
+      confidenceReasons: ['Forecast window could not be established from available data'],
+      hourlyResults: [],
+      dataSourceType: 'sample',
+      fetchTime: fetchTimeString,
+      fetchTimestamp: rawCity.fetchTimestamp,
+      isUnavailable: true,
+      unavailableReason: !hourly12
+        ? 'Target 12-hour forecast window cannot be established (current hour missing or short window)'
+        : 'Incomplete forecast window (fewer than 12 hours)',
+    };
+  }
   const hourlyResults: HourlyRiskResult[] = hourly12.map((raw, idx) =>
     predictRisk(idx, raw, modelConfig, APP_CONFIG)
   );

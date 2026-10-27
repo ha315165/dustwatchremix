@@ -115,6 +115,8 @@ export interface CityOutlook {
   dataSourceType: 'live' | 'cached' | 'sample' | 'snapshot';
   fetchTime: string; // Asia/Dubai formatted
   fetchTimestamp: number;
+  isUnavailable?: boolean;
+  unavailableReason?: string;
 }
 
 export interface AdviceResponse {
@@ -231,6 +233,9 @@ export interface RawCityData {
   isSampleOrSnapshot?: boolean;
   snapshotLabel?: string;
   simulatedOldHours?: number;
+  isSynthetic?: boolean;
+  isSample?: boolean;
+  isUnknownOrigin?: boolean;
 }
 
 export type SchoolActivityType = 'break' | 'pe' | 'lunch_other';

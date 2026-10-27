@@ -666,6 +666,124 @@ test('School-advice endpoint: caching, cache isolation, input validation, and fa
     assert.equal(body.ok, false);
     assert.match(body.error, /non-normal action requires triggered rules/);
   });
+
+  await t.test('Priority 2: Server rejects criteria_met_no_actions without explicitly verified isPolicyConfigured: true (HTTP 400)', async () => {
+    // Missing isPolicyConfigured
+    const resMissing = await fetch(`${url}/api/gemini/school-advice`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...basePayload,
+        status: 'criteria_met_no_actions',
+        action: 'normal',
+        triggeredRules: [],
+      }),
+    });
+    assert.equal(resMissing.status, 400);
+    const bodyMissing = await resMissing.json();
+    assert.equal(bodyMissing.ok, false);
+    assert.match(bodyMissing.error, /requires explicitly verified isPolicyConfigured: true/);
+
+    // isPolicyConfigured: false
+    const resFalse = await fetch(`${url}/api/gemini/school-advice`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...basePayload,
+        status: 'criteria_met_no_actions',
+        action: 'normal',
+        triggeredRules: [],
+        isPolicyConfigured: false,
+      }),
+    });
+    assert.equal(resFalse.status, 400);
+    const bodyFalse = await resFalse.json();
+    assert.equal(bodyFalse.ok, false);
+    assert.match(bodyFalse.error, /requires explicitly verified isPolicyConfigured: true/);
+  });
+
+  await t.test('Priority 2: Server rejects contradictory status/action combinations with HTTP 400', async () => {
+    // criteria_met_no_actions with non-normal action
+    const resActionMismatch = await fetch(`${url}/api/gemini/school-advice`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...basePayload,
+        status: 'criteria_met_no_actions',
+        action: 'shorten',
+        isPolicyConfigured: true,
+        triggeredRules: [],
+      }),
+    });
+    assert.equal(resActionMismatch.status, 400);
+    const bodyAction = await resActionMismatch.json();
+    assert.match(bodyAction.error, /cannot have non-normal action/);
+
+    // criteria_met_no_actions with triggered rules
+    const resRuleMismatch = await fetch(`${url}/api/gemini/school-advice`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...basePayload,
+        status: 'criteria_met_no_actions',
+        action: 'normal',
+        isPolicyConfigured: true,
+        triggeredRules: [{ id: 'R1', metric: 'pm10' }],
+      }),
+    });
+    assert.equal(resRuleMismatch.status, 400);
+    const bodyRule = await resRuleMismatch.json();
+    assert.match(bodyRule.error, /cannot have triggered rules/);
+
+    // criteria_met_no_actions with isIncomplete: true
+    const resIncompleteMismatch = await fetch(`${url}/api/gemini/school-advice`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...basePayload,
+        status: 'criteria_met_no_actions',
+        action: 'normal',
+        isPolicyConfigured: true,
+        isIncomplete: true,
+        triggeredRules: [],
+      }),
+    });
+    assert.equal(resIncompleteMismatch.status, 400);
+    const bodyIncomplete = await resIncompleteMismatch.json();
+    assert.match(bodyIncomplete.error, /cannot have incomplete data/);
+
+    // action_triggered with isPolicyConfigured: false
+    const resActionUnconfigured = await fetch(`${url}/api/gemini/school-advice`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...basePayload,
+        status: 'action_triggered',
+        action: 'shorten',
+        isPolicyConfigured: false,
+        triggeredRules: [{ id: 'R1', metric: 'pm10' }],
+      }),
+    });
+    assert.equal(resActionUnconfigured.status, 400);
+    const bodyActionUnconfig = await resActionUnconfigured.json();
+    assert.match(bodyActionUnconfig.error, /action_triggered cannot have isPolicyConfigured: false/);
+
+    // policy_unconfigured with isPolicyConfigured: true
+    const resUnconfigContradiction = await fetch(`${url}/api/gemini/school-advice`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...basePayload,
+        status: 'policy_unconfigured',
+        action: 'normal',
+        isPolicyConfigured: true,
+        triggeredRules: [],
+      }),
+    });
+    assert.equal(resUnconfigContradiction.status, 400);
+    const bodyUnconfig = await resUnconfigContradiction.json();
+    assert.match(bodyUnconfig.error, /policy_unconfigured cannot have isPolicyConfigured: true/);
+  });
 });
 
 test('General advice endpoint: caching, cache isolation across all prompt-affecting inputs, and fallback isolation', async (t) => {

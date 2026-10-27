@@ -148,7 +148,7 @@ export const SchoolModeScreen: React.FC<SchoolModeScreenProps> = ({
 
   // Extract 12 hours from raw data
   const { hourString } = getCurrentDubaiHour();
-  const raw12Hours = currentRaw ? extract12Hours(currentRaw, hourString) : [];
+  const raw12Hours = (currentRaw && extract12Hours(currentRaw, hourString)) || [];
 
   // Compute 12-hour school assessments
   const hourlyAssessments: HourlySchoolAssessment[] = buildHourlySchoolAssessments(
